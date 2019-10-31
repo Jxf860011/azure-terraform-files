@@ -1,0 +1,554 @@
+Terraform is one of the tools that comes pre-installed on Azure Cloud Shell. You will initialize a working directory that includes the Azure Resource Manager (ARM) Terraform Provider plugin in this Lab Step. The ARM Provider has support for over 70 Azure resources. The provider can be configured with subscription, client, and tenant IDs; however by running through the Cloud Shell the provider will automatically use the values associated with your Azure Portal session.
+
+ 
+
+Instructions
+1. Click the maximize button to give your Cloud Shell more screen real estate:
+alt
+
+ 
+
+2. Confirm that Terraform is installed:
+
+terraform version 
+alt
+
+The version you see may differ from the one in the image, but you can continue to complete the Lab with any installed version.
+
+ 
+
+3. Make a directory for organizing your Terraform configuration, and change into it:
+
+mkdir clouddrive/infra && cd clouddrive/infra
+The clouddrive directory is persisted in the Azure file share used by the Cloud Shell. Any data stored there will be accessible across Cloud Shell sessions.
+
+ 
+
+4. Create a Terraform configuration file declaring the ARM Provider:
+
+cat > main.tf <<'EOF'
+provider "azurerm" {
+  version = "< 2"
+  
+  # Prevent provider from trying to register Azure Resource Providers
+  skip_provider_registration = true
+}
+
+EOF
+The configuration file contents are wrapped between the EOF delimiters. The version argument constrains the downloaded ARM Provider plugin to be less than version 2. The skip_provider_registration argument instructs the azurerm provider to not attempt to register Azure Resource Providers. This resolves an issue with the provider attempting to register the Microsoft.CDN provider when it is not required for this Lab.
+
+ 
+
+5. Initialize the working directory by running the init command:
+
+terraform init
+alt
+
+The version of the downloaded plugin may be different for you. However, it will always be less than version 2 due to the value of the version argument in the configuration.
+
+  
+
+Summary
+
+
+#######
+1. Use the Azure CLI to list the name of the resource group in table output format:
+
+az group list --query '[].name' -o table
+alt
+
+The query string passed to the --query option selects only the name field from the resource group.
+
+ 
+
+2. Store the resource group name in a shell variable:
+
+resource_group=$(az group list --query '[].name' -o table | tail -1)
+ 
+
+3. Append a resource group data source to the main.tf configuration file using the shell variable to specify the name:
+
+cat >> main.tf <<EOF
+data "azurerm_resource_group" "dev" {
+  name = "$resource_group"
+}
+
+EOF
+The azurerm_resource_group data source documentation is available here.
+
+ 
+
+4. Apply the configuration to generate the state file storing the data source attributes:
+
+terraform apply
+alt
+
+ 
+
+5. Enter the Terraform interpolation console to verify that attributes for the data source are available:
+
+terraform console
+alt
+
+ 
+
+6. At the console prompt, enter the following interpolation string to retrieve the resource group location using the data source:
+
+data.azurerm_resource_group.dev.location
+alt
+
+ 
+
+7. Exit the Terraform interpolation console:
+
+exit
+
+##########
+Introduction
+In Terraform, modules are reusable components. The resources inside of a module are managed together. You have actually been working with a module all along. The root module is defined by the configuration files in the working directory where you run apply. This corresponds to the main.tf file in this Lab. You can also use modules in your configuration from a variety of sources including local directories, the public Terraform Registry, and GitHub repositories. You write module blocks in your configuration to use them. The minimal syntax for using a module is as follows:
+
+module "module_name" {
+  source = "<path or URI for the module>"
+}
+Modules in the public Terraform Registry are referenced using the pattern namespace/name/provider. For example, Azure/network/azurerm is in the Azure namespace with a module name of network and it uses the azurerm provider. In this Lab Step, you will use the network ARM module to create a VNet where you will later create a VM.
+
+ 
+
+Instructions
+1. Append the network module configuration to the main.tf configuration file.
+
+cat >> main.tf <<'EOF'
+module "network" {
+  source = "cloudacademy/network/azurerm"
+  version = "2.0.1"
+  resource_group_name = "${data.azurerm_resource_group.dev.name}"
+  location = "${data.azurerm_resource_group.dev.location}"
+  subnet_names = ["subnet1"]
+  vnet_name = "web"
+
+  tags = {
+    environment = "dev"
+  }
+}
+
+EOF
+The arguments in the module work the same way as arguments of a resource. Internally, the module uses the arguments you provide to create the resources it requires. Identifying a specific version is highly recommended to avoid unintentional changes in behavior. The version argument is only supported when using modules from Terraform Registries. Note the source is cloudacademy/network/azurerm and not the official Azure/network/azurerm module. The official module requires creating a resource group which is not required in your lab.
+
+ 
+
+2. Attempt to apply the new configuration:
+
+terraform apply
+alt
+
+Because the module is from the Terraform Registry, you need to download it into your working directory using the init command.
+
+ 
+
+3. Download the network module:
+
+terraform init
+alt
+
+ 
+
+4. Use the providers command to see the hierarchy of modules and providers they depend on:
+
+terraform providers
+alt
+
+The root module requires the azurerm provider of version less than 2. The network module also depends on the azurerm provider and implicitly inherits the provider version from the root module. It is a best practice to specify all required providers in the root module and have all other modules inherit the providers.
+
+ 
+
+5. View the plan for applying the new configuration:
+
+terraform apply
+alt
+
+You can see the module creates three resources: a resource group, a VNet, and a subnet in the VNet. The address_space of the VNet and address_prefix of the subnet are the default values. You can use additional arguments to configure them.
+
+ 
+
+6. Enter yes to the Do you want to perform these actions? prompt:
+
+alt
+
+The resources in the module should be created within 30 seconds. You might be wondering about the resource group that was added. The resource group already existed so the existing resource group is added to Terraform's state instead of creating a new one.  The output also shows Creating... which isn't entirely accurate. But because the REST API for Azure resource groups supports creating and updating with the same request, the resource group is updated instead of created (although the update doesn't change anything).
+
+ 
+
+7. Issue the show command to view the entire state stored by Terraform:
+
+terraform show
+Besides the resource group data source, the three resources in the network module are now also included.
+
+ 
+
+8. List the outputs of the network module:
+
+cat .terraform/modules/network/cloudacademy-terraform-azurerm-network*/outputs.tf
+alt
+
+The outputs of the module can be used for scripting purposes or within the HashiCorp Configuration Language (HCL) interpolation syntax. You will use the outputs in a future Lab Step to declare where your VM should be created.
+
+ 
+
+Summary
+In this Lab Step, you created an Azure VNet, and subnet using a module from the public Terraform Registry. You could have also created the
+ VNet and subnet using the virtual_network resource. Working with public modules can be more convenient than using resources directly.
+
+#######
+Introduction
+In this Lab Step, you will use another module from the public Terraform Registry to create a network security group (NSG). The NSG module comes with several sub-modules that include predefined network traffic rules. You will use the HTTP submodule to allow HTTP traffic to the VM. By using predefined rules, the configuration is much fewer lines than you would need to write if you used resources directly. The predefined rules allow traffic from anywhere, which might not be what you want but it's what we want for this Lab. You will also add a custom rule to allow SSH traffic.
+
+ 
+
+Instructions
+1. Append the NSG module configuration to the main configuration file:
+
+cat >> main.tf <<'EOF'
+module "security" {
+  source              = "cloudacademy/network-security-group/azurerm//modules/HTTP"
+  resource_group_name = "${data.azurerm_resource_group.dev.name}"
+  location            = "${data.azurerm_resource_group.dev.location}"
+  security_group_name = "web_nsg"
+ 
+  custom_rules = [
+    {
+      name                   = "ssh"
+      priority               = "200"
+      direction              = "Inbound"
+      access                 = "Allow"
+      protocol               = "tcp"
+      destination_port_range = "22"
+      description            = "ssh-access"
+    }
+  ]
+
+  tags = {
+    environment = "dev"
+  }
+}
+
+EOF
+There are a few points to note in the security module configuration:
+
+The source ends with //modules/HTTP, which is how you can indicate the submodule to use.
+The custom_rules list is where you specify NSG rules in addition to the predefined ones.
+If no address ranges are included in the rules, traffic will be allowed from anywhere.
+You are again using a Cloud Academy module which does not require creating a resource group compared to the official Azure module.
+
+ 
+
+2. Initialize the security module:
+
+terraform init
+alt
+
+The command initializes two modules:
+
+module.security
+module.security.nsg
+ 
+
+3. Apply the configuration changes, and enter yes when prompted:
+
+terraform apply
+alt
+
+Your resource group now includes an NSG with rules allowing HTTP and SSH access.
+
+ 
+
+Summary
+In this Lab Step, you used another Terraform Registry module to create an NSG. You also worked around the symbolic link limitation of Azure Cloud Shell.
+
+##########
+Introduction
+In this Lab Step, you will create a local module in a subdirectory for provisioning a VM in Azure. The module will include several resources required to create the VM in Azure. It will also use a provisioner. Provisioners are used to run scripts when a resource is created. The provisioner will set up a web server on the VM.
+
+Terraform has some guidelines for creating modules that you intend to share. You will follow the standard pattern of creating three files:
+
+main.tf: The entry point for the module where most resources are created
+variables.tf: Declaration of variables that are input to the module
+outputs.tf: Declaration of outputs from the module
+You can publish your modules to the public Terraform Registry, if desired. You publish a module by pushing it to a public GitHub repository and meeting a few requirements. Because anyone can submit a module on the Terraform Registry, you should be careful when choosing modules from there. Terraform indicates modules that it has verified with the following icon:
+
+alt 
+
+The Terraform Registry modules used in previous Lab Steps are verified modules.
+
+ 
+
+Instructions
+1. Make a vm directory and scripts subdirectory for your module:
+
+mkdir -p vm/scripts
+ 
+
+2. Create a variables.tf file for the vm module that declares the module's variables:
+
+cat > vm/variables.tf <<'EOF'
+variable "resource_group_name" {}
+
+variable "resource_group_location" {}
+
+variable "subnet_id" {}
+
+variable "network_security_group_id" {}
+
+variable "environment" {
+  description = "Name of the environment the VM will be deployed in"
+  default = "dev"
+}
+
+EOF
+The VM requires a resource group name and location, an ID of a subnet to place the VM in, and the ID of the NSG to associate with the VM's network interface. The {} syntax declares the variables as required string variables. The environment variable is optional because a default value is provided.
+
+ 
+
+3. Create a main.tf file for the vm module declaring the resources in the module:
+
+cat > vm/main.tf <<'EOF'
+# locals are values that can be reused in a module 
+locals {
+  # Define shared tags for all resources
+  shared_tags = {
+    Note = "Created by vm module"
+  }
+}
+
+# Public IP to reach the VM from the internet
+resource "azurerm_public_ip" "web_public_ip" {
+  name                = "web_public_ip"
+  location            = "${var.resource_group_location}"
+  resource_group_name = "${var.resource_group_name}"
+  allocation_method   = "Static"
+
+  tags = "${local.shared_tags}"
+}
+
+# Network interface to attach the VM to the network
+resource "azurerm_network_interface" "web_interface" {
+  name                      = "web_ni"
+  location                  = "${var.resource_group_location}"
+  resource_group_name       = "${var.resource_group_name}"
+  network_security_group_id = "${var.network_security_group_id}"
+
+  ip_configuration {
+    name                          = "web_ip_configuration"
+    subnet_id                     = "${var.subnet_id}"
+    private_ip_address_allocation = "dynamic"
+    public_ip_address_id          = "${azurerm_public_ip.web_public_ip.id}"
+  }
+
+  tags = "${local.shared_tags}"
+}
+
+# Managed disk to store the OS disk of the VM
+resource "azurerm_managed_disk" "web_disk" {
+  name                 = "web_disk"
+  location             = "${var.resource_group_location}"
+  resource_group_name  = "${var.resource_group_name}"
+  storage_account_type = "Standard_LRS"
+  create_option        = "Empty"
+  disk_size_gb         = "30"
+
+  tags = "${local.shared_tags}"
+}
+
+# VM to run the web server
+resource "azurerm_virtual_machine" "web_server" {
+  name                  = "web_server"
+  location              = "${var.resource_group_location}"
+  resource_group_name   = "${var.resource_group_name}"
+  network_interface_ids = ["${azurerm_network_interface.web_interface.id}"]
+  vm_size               = "Basic_A1"
+
+  delete_os_disk_on_termination = true
+
+  # Use a Ubuntu image
+  storage_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "16.04-LTS"
+    version   = "latest"
+  }
+
+  # Use the managed disk for storing the OS disk
+  storage_os_disk {
+    name              = "web_os_disk"
+    caching           = "ReadWrite"
+    create_option     = "FromImage"
+    managed_disk_type = "Standard_LRS"
+  }
+
+  os_profile {
+    computer_name  = "webserver"
+    admin_username = "student"
+    admin_password = "1Cloud_Academy_Labs!"
+  }
+
+  os_profile_linux_config {
+    disable_password_authentication = false
+  }
+
+  # Prevent down-time with a lifecyle policy
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  provisioner "remote-exec" {
+    # Use module relative path (path.module) to the script
+    script = "${path.module}/scripts/init.sh"
+
+    connection {
+      type     = "ssh"
+      host     = "${azurerm_public_ip.web_public_ip.ip_address}"
+      user     = "student"
+      password = "1Cloud_Academy_Labs!"
+    }
+  }
+
+  # Merge the shared_tags with an environment tag
+  tags = "${merge(
+    local.shared_tags,
+    map(
+      "Environment", var.environment
+    )
+  )}"
+}
+
+EOF
+There are quite a few resources needed to launch the VM. Read through the configuration to understand how the resources are configured. There are a few features of Terraform you have not seen before:
+
+locals: Locals are values that are defined in a module and can be reused multiple times in a module. The configuration uses a local map value for shared_tags. Locals can be referenced with local.name in interpolation syntax.
+lifecycle: The lifecycle block is a meta-parameter that all resources share. You can control aspects of a resource's lifecycle by adding a lifecycle block to the resource's configuration. Available lifecycle keys are:
+create_before_destroy: Ensure a new resource is created before destroying the old one when a change requires a new resource be created
+prevent_destroy: Cause an error whenever a plan would destroy the resource
+ignore_changes: Ignore changes to a given list of resource attributes
+provisioner: The provisioner used in the example is of type remote-exec, which runs commands on a remote resource after it is created. It requires a connection block to tell Terraform how to connect to the resource. The NSG will allow the incoming SSH connection when the provisioner runs. The script points to a file that includes the commands to execute. You will create the file in a later instruction.
+ 
+
+4. Create an outputs.tf file for the vm module declaring the output of the module:
+
+cat > vm/outputs.tf <<'EOF'
+output "web_server_public_ip" {
+  value = "${azurerm_public_ip.web_public_ip.ip_address}"
+}
+
+EOF
+The module outputs the public IP address. You will use the output to send a request to the web server to verify it is operational.
+
+ 
+
+5. Create the provisioner script that is referenced by the remote-exec provisioner:
+
+cat > vm/scripts/init.sh <<'EOF'
+#!/usr/bin/env bash
+
+# install Apache web server
+sudo apt-get update
+sudo apt-get -y install apache2
+
+# Create a web asset in the default serving directory
+sudo sh -c 'echo "Served with the help of Terraform" > /var/www/html/index.html'
+EOF
+The script installs the Apache web server and serves a string from the default serving directory of /var/www/html.
+
+ 
+
+6. List all the contents of the vm directory:
+
+find vm -type f
+alt
+
+These files define your vm module.
+
+ 
+
+Summary
+In this Lab Step, you created a module for provisioning an Azure VM. You can create your own modules for any infrastructure components that you want to reuse or for organizing large projects in Terraform. You also learned how to use provisioners to run scripts after a resource is created
+
+
+#####
+In this Lab Step, you will use the VM module you created in the previous step to provision a VM in Azure. You can use local file system modules the same way you use Terraform Registry modules, except with a different format for the source string and that the version argument is not supported.
+
+ 
+
+Instructions
+1. Append a vm module configuration to your root configuration module main.tf:
+
+cat >> main.tf <<'EOF'
+module "vm" {
+  source = "./vm"
+
+  resource_group_name       = "${data.azurerm_resource_group.dev.name}"
+  resource_group_location   = "${data.azurerm_resource_group.dev.location}"
+  subnet_id                 = "${module.network.vnet_subnets[0]}"
+  network_security_group_id = "${module.security.network_security_group_id}"
+}
+
+EOF
+The source argument specifies the relative path to the module. The other arguments are the module's required arguments declared in the module's variables.tf file. The environment argument is not set, so the default value will be used.
+
+ 
+
+2. Create a root outputs file to store the web server's public IP address in the state:
+
+cat > outputs.tf <<'EOF'
+output "web_server_public_ip" {
+  description = "The IP address of the newly created VM"
+  value = module.vm.web_server_public_ip
+}
+
+EOF
+Since version 0.12 of Terraform, only the root outputs are stored in the state and directly accessible with the output command. In order to store the module's output, the root output file simply references it as above.
+
+ 
+
+3. Initialize the working directory as a new module is being used:
+
+terraform init
+alt
+
+ 
+
+4. Apply the configuration changes, and enter yes when prompted:
+
+terraform apply
+alt
+
+Notice the Note shared tag is applied to every resource in the vm module. The output will display progress until completion is complete. It takes several minutes to create the VM. The output from the remote-exec provisioner commands are displayed when the provisioner is running:
+
+alt
+
+Everything is complete when you see a green Apply complete! message and the web_server_public_ip output.
+
+ 
+
+5. Store the VM's public in a shell variable:
+
+web_server_ip=$(terraform output | cut -d " " -f 3)
+The cut command extracts the IP address from the output command's output.
+
+ 
+
+6. Send an HTTP request to the web server using the curl command:
+
+curl $web_server_ip
+alt
+
+The response indicates that the VM is serving the contents of the file that the provisioner created.
+
+ 
+
+Summary
+In this Lab Step, you used the local VM module you created to provision a web server in Azure. You could easily reuse the module in other projects although you would probably want to use a variable to allow the provisioner script to be customized.
+
+You have now reached the end of this Lab. If you want to see more examples of Terraform configurations for Azure, check out the Azure Resource Manager provider's GitHub repo.
+
+
+examplecode *********
+https://github.com/gruntwork-io/intro-to-terraform.
